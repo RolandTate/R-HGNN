@@ -35,8 +35,8 @@ args = {
     'epochs': 200,
     'patience': 20
 }
-args['data_path'] = f'../dataset/{args["dataset"]}/{args["dataset"]}.pkl'
-args['data_split_idx_path'] = f'../dataset/{args["dataset"]}/{args["dataset"]}_split_idx.pkl'
+args['data_path'] = f'../../../dataset/{args["dataset"]}/{args["dataset"]}.pkl'
+args['data_split_idx_path'] = f'../../../dataset/{args["dataset"]}/{args["dataset"]}_split_idx.pkl'
 args['device'] = f'cuda:{args["cuda"]}' if torch.cuda.is_available() and args["cuda"] >= 0 else 'cpu'
 
 
@@ -129,7 +129,7 @@ if __name__ == '__main__':
                                                           args['weight_decay'],
                                                           steps_per_epoch=len(train_loader), epochs=args['epochs'])
 
-    save_model_folder = f"../save_model/{args['dataset']}/{args['model_name']}"
+    save_model_folder = f"../../../save_model/{args['dataset']}/{args['model_name']}"
 
     shutil.rmtree(save_model_folder, ignore_errors=True)
     os.makedirs(save_model_folder, exist_ok=True)
@@ -259,7 +259,7 @@ if __name__ == '__main__':
     }
     result_json = json.dumps(result_json, indent=4)
 
-    save_result_folder = f"../results/{args['dataset']}"
+    save_result_folder = f"../../../results/{args['dataset']}"
     if not os.path.exists(save_result_folder):
         os.makedirs(save_result_folder, exist_ok=True)
     save_result_path = os.path.join(save_result_folder, f"{args['model_name']}.json")

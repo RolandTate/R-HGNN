@@ -9,6 +9,7 @@ import shutil
 from tqdm import tqdm
 import dgl
 
+from model_y.R_HGT import R_HGT
 from utils.utils import set_random_seed, convert_to_gpu, load_dataset
 from utils.EarlyStopping import EarlyStopping
 from utils.utils import get_n_params, get_edge_data_loader, get_predict_edge_index, get_optimizer_and_lr_scheduler, \
@@ -22,7 +23,7 @@ the evaluation process (validation and test) takes in one positive sample with o
 """
 args = {
     'dataset': 'OGB_MAG',
-    'model_name': 'R_HGNN_lr0.001_dropout0.3_seed_0_link_prediction',
+    'model_name': 'R_HGT_lr0.001_dropout0.3_seed_0_link_prediction',
     'predict_category': 'paper',
     'seed': 0,
     'cuda': 0,
@@ -38,14 +39,14 @@ args = {
     'node_neighbors_min_num': 10,  # number of sampled edges for each type for each GNN layer
     'negative_sample_edge_num': 5,
     'sample_edge_rate': 0.01,  # train: validate: test = 3 : 1 : 1
-    'sampled_edge_type': 'affiliated_with',  # writes or affiliated_with, two kinds of predicted relations
+    'sampled_edge_type': 'writes',  # writes or affiliated_with, two kinds of predicted relations
     'optimizer': 'adam',
     'weight_decay': 0.0,
     'epochs': 200,
     'patience': 50
 }
-args['data_path'] = f'../dataset/{args["dataset"]}/{args["dataset"]}.pkl'
-args['data_split_idx_path'] = f'../dataset/{args["dataset"]}/{args["dataset"]}_split_idx.pkl'
+args['data_path'] = f'../../../dataset/{args["dataset"]}/{args["dataset"]}.pkl'
+args['data_split_idx_path'] = f'../../../dataset/{args["dataset"]}/{args["dataset"]}_split_idx.pkl'
 args['device'] = f'cuda:{args["cuda"]}' if torch.cuda.is_available() and args["cuda"] >= 0 else 'cpu'
 
 
@@ -137,16 +138,17 @@ if __name__ == '__main__':
                                                                  test_edge_idx=test_edge_idx,
                                                                  reverse_etypes=reverse_etypes)
 
-    r_hgnn = R_HGNN(graph=graph,
-                    input_dim_dict={ntype: graph.nodes[ntype].data['feat'].shape[1] for ntype in graph.ntypes},
-                    hidden_dim=args['hidden_units'], relation_input_dim=args['relation_hidden_units'],
-                    relation_hidden_dim=args['relation_hidden_units'],
-                    num_layers=args['n_layers'], n_heads=args['num_heads'], dropout=args['dropout'],
-                    residual=args['residual'], norm=args['norm'])
+
+    r_hgt = R_HGT(graph=graph,
+                  input_dim_dict={ntype: graph.nodes[ntype].data['feat'].shape[1] for ntype in graph.ntypes},
+                  hidden_dim=args['hidden_units'], relation_input_dim=args['relation_hidden_units'],
+                  relation_hidden_dim=args['relation_hidden_units'],
+                  num_layers=args['n_layers'], n_heads=args['num_heads'], dropout=args['dropout'],
+                  residual=args['residual'], norm=args['norm'])
 
     link_score_predictor = LinkScorePredictor(hid_dim=args['hidden_units'] * args['num_heads'])
 
-    model = nn.Sequential(r_hgnn, link_score_predictor)
+    model = nn.Sequential(r_hgt, link_score_predictor)
 
     model = convert_to_gpu(model, device=args['device'])
     print(model)
@@ -159,7 +161,7 @@ if __name__ == '__main__':
                                                           args['weight_decay'],
                                                           steps_per_epoch=len(train_loader), epochs=args['epochs'])
 
-    save_model_folder = f"../save_model/{args['dataset']}/{args['model_name']}"
+    save_model_folder = f"../../../save_model/{args['dataset']}/{args['model_name']}"
 
     shutil.rmtree(save_model_folder, ignore_errors=True)
     os.makedirs(save_model_folder, exist_ok=True)
@@ -182,7 +184,6 @@ if __name__ == '__main__':
         train_loader_tqdm = tqdm(train_loader, ncols=120)
         for batch, (input_nodes, positive_graph, negative_graph, blocks) in enumerate(train_loader_tqdm):
             blocks = [convert_to_gpu(b, device=args['device']) for b in blocks]
-            print(f'len: {len(blocks)}')
             positive_graph, negative_graph = convert_to_gpu(positive_graph, negative_graph, device=args['device'])
             # target node relation representation in the heterogeneous graph
             input_features = {(stype, etype, dtype): blocks[0].srcnodes[dtype].data['feat'] for stype, etype, dtype in
@@ -249,7 +250,7 @@ if __name__ == '__main__':
             break
 
     # save model result
-    save_result_folder = f"../results/{args['dataset']}"
+    save_result_folder = f"../../../results/{args['dataset']}"
     if not os.path.exists(save_result_folder):
         os.makedirs(save_result_folder, exist_ok=True)
     save_result_path = os.path.join(save_result_folder, f"{args['model_name']}.json")
