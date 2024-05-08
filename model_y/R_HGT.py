@@ -4,10 +4,10 @@ import torch.nn.functional as F
 import dgl
 from tqdm import tqdm
 
-from model.RelationGraphConv import RelationGraphConv
-from model.HeteroConv import HeteroGraphConv
-from model.RelationCrossing import RelationCrossing
-from model.RelationFusing import RelationFusing
+from model_y.RelationGraphConv import RelationGraphConv, RelationAttentionConv
+from model_y.HeteroConv import HeteroGraphConv
+from model_y.RelationCrossing import RelationCrossing
+from model_y.RelationFusing import RelationFusing
 
 
 class R_HGNN_Layer(nn.Module):
@@ -28,7 +28,6 @@ class R_HGNN_Layer(nn.Module):
         :param norm: boolean, layer normalization or not
         """
         super(R_HGNN_Layer, self).__init__()
-        self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.relation_input_dim = relation_input_dim
         self.relation_hidden_dim = relation_hidden_dim
@@ -38,10 +37,22 @@ class R_HGNN_Layer(nn.Module):
         self.residual = residual
         self.norm = norm
 
+        # node transformation layers of each type
+        self.node_transformation_layers = nn.ModuleDict({
+            ntype: nn.Linear(input_dim, hidden_dim * n_heads)
+            for ntype in graph.ntypes
+        })
+
         # node transformation parameters of each type
         self.node_transformation_weight = nn.ParameterDict({
             ntype: nn.Parameter(torch.randn(input_dim, n_heads * hidden_dim))
             for ntype in graph.ntypes
+        })
+
+        # srcnode in relation transformation layers of each type
+        self.relation_src_node_transformation_layers = nn.ModuleDict({
+            etype: nn.Linear(hidden_dim * n_heads, hidden_dim * n_heads)
+            for etype in graph.etypes
         })
 
         # relation transformation parameters of each type, used as attention queries
@@ -58,8 +69,8 @@ class R_HGNN_Layer(nn.Module):
 
         # hetero conv modules, each RelationGraphConv deals with a single type of relation
         self.hetero_conv = HeteroGraphConv({
-            etype: RelationGraphConv(in_feats=(input_dim, input_dim), out_feats=hidden_dim,
-                                     num_heads=n_heads, dropout=dropout, negative_slope=negative_slope)
+            etype: RelationAttentionConv(hidden_dim=hidden_dim, num_heads=n_heads,
+                                         dropout=dropout, negative_slope=negative_slope)
             for etype in graph.etypes
         })
 
@@ -91,8 +102,12 @@ class R_HGNN_Layer(nn.Module):
     def reset_parameters(self):
         """Reinitialize learnable parameters."""
         gain = nn.init.calculate_gain('relu')
-        for weight in self.node_transformation_weight:
-            nn.init.xavier_normal_(self.node_transformation_weight[weight], gain=gain)
+        for ntype in self.node_transformation_layers:
+            nn.init.xavier_normal_(self.node_transformation_layers[ntype].weight, gain=gain)
+        for ntype in self.node_transformation_weight:
+            nn.init.xavier_normal_(self.node_transformation_weight[ntype], gain=gain)
+        for etype in self.relation_src_node_transformation_layers:
+            nn.init.xavier_normal_(self.relation_src_node_transformation_layers[etype].weight,)
         for weight in self.relation_transformation_weight:
             nn.init.xavier_normal_(self.relation_transformation_weight[weight], gain=gain)
         for etype in self.relation_propagation_layer:
@@ -125,8 +140,9 @@ class R_HGNN_Layer(nn.Module):
             input_dst = relation_target_node_features
 
         # output_features, dict {(srctype, etypye, dsttype): target_node_features}
-        output_features = self.hetero_conv(graph, input_src, input_dst, relation_embedding,
-                                           self.node_transformation_weight, self.relation_transformation_weight)
+        output_features, dst_nodes_after_transformation = self.hetero_conv(graph, input_src, input_dst, relation_embedding,
+                                           self.node_transformation_layers, self.relation_src_node_transformation_layers,
+                                           self.relation_transformation_weight)
 
         # residual connection for the target node
         if self.residual:
@@ -142,7 +158,6 @@ class R_HGNN_Layer(nn.Module):
             # (dsttype_node_relations_num, dst_nodes_num, n_heads * hidden_dim)
             dst_node_relations_features = torch.stack([output_features[(stype, reltype, dtype)]
                                                    for stype, reltype, dtype in output_features if dtype == dsttype], dim=0)
-
             output_features_dict[(srctype, etype, dsttype)] = self.relations_crossing_layer(dst_node_relations_features,
                                                                                             self.relations_crossing_attention_weight[etype])
 
@@ -157,10 +172,10 @@ class R_HGNN_Layer(nn.Module):
 
         # relation features after relation crossing layer, {(srctype, etype, dsttype): target_node_features}
         # relation embeddings after relation update, {etype: relation_embedding}
-        return output_features_dict, relation_embedding_dict
+        return output_features_dict, relation_embedding_dict, dst_nodes_after_transformation
 
 
-class R_HGNN(nn.Module):
+class R_HGT(nn.Module):
     def __init__(self, graph: dgl.DGLHeteroGraph, input_dim_dict: dict, hidden_dim: int, relation_input_dim: int,
                  relation_hidden_dim: int, num_layers: int, n_heads: int = 4,
                  dropout: float = 0.2, negative_slope: float = 0.2, residual: bool = True, norm: bool = False):
@@ -178,7 +193,7 @@ class R_HGNN(nn.Module):
         :param residual: boolean, residual connections or not
         :param norm: boolean, layer normalization or not
         """
-        super(R_HGNN, self).__init__()
+        super(R_HGT, self).__init__()
 
         self.input_dim_dict = input_dim_dict
         self.num_layers = num_layers
@@ -202,6 +217,11 @@ class R_HGNN(nn.Module):
         })
 
         # each layer takes in the heterogeneous graph as input
+        self.node_transformation_layers = nn.ModuleDict({
+            ntype: nn.Linear(hidden_dim * n_heads, hidden_dim * n_heads) for ntype, in_dim in input_dim_dict.items()
+        })
+
+        # each layer takes in the heterogeneous graph as input
         self.layers = nn.ModuleList()
 
         # for each relation_layer
@@ -211,6 +231,21 @@ class R_HGNN(nn.Module):
         for _ in range(1, self.num_layers):
             self.layers.append(R_HGNN_Layer(graph, hidden_dim * n_heads, hidden_dim, relation_hidden_dim * n_heads,
                                             relation_hidden_dim, n_heads, dropout, negative_slope, residual, norm))
+
+
+        # transformer attention layers for relation fusing
+        self.query_linears = nn.ModuleDict({
+            etype: nn.Linear(hidden_dim * n_heads, hidden_dim * n_heads) for etype in graph.etypes
+        })
+        self.query_linears_n = nn.ModuleDict({
+            ntype: nn.Linear(hidden_dim * n_heads, hidden_dim * n_heads) for ntype in graph.ntypes
+        })
+        self.key_linears = nn.ModuleDict({
+            etype: nn.Linear(hidden_dim * n_heads, hidden_dim * n_heads) for etype in graph.etypes
+        })
+        self.value_linears = nn.ModuleDict({
+            etype: nn.Linear(hidden_dim * n_heads, hidden_dim * n_heads) for etype in graph.etypes
+        })
 
         # transformation matrix for target node representation under each relation
         self.node_transformation_weight = nn.ParameterDict({
@@ -228,6 +263,12 @@ class R_HGNN(nn.Module):
                                               num_heads=n_heads,
                                               dropout=dropout, negative_slope=negative_slope)
 
+        # different relations fusing based on transformer
+        self.relation_fusing_module = RelationFusing(node_hidden_dim=hidden_dim,
+                                              relation_hidden_dim=relation_hidden_dim,
+                                              num_heads=n_heads,
+                                              dropout=dropout, negative_slope=negative_slope)
+
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -238,6 +279,16 @@ class R_HGNN(nn.Module):
             nn.init.xavier_normal_(self.relation_embedding[etype], gain=gain)
         for ntype in self.projection_layer:
             nn.init.xavier_normal_(self.projection_layer[ntype].weight, gain=gain)
+        for ntype in self.node_transformation_layers:
+            nn.init.xavier_normal_(self.node_transformation_layers[ntype].weight, gain=gain)
+        for etype in self.query_linears:
+            nn.init.xavier_normal_(self.query_linears[etype].weight, gain=gain)
+        for ntype in self.query_linears_n:
+            nn.init.xavier_normal_(self.query_linears_n[ntype].weight, gain=gain)
+        for etype in self.key_linears:
+            nn.init.xavier_normal_(self.key_linears[etype].weight, gain=gain)
+        for etype in self.value_linears:
+            nn.init.xavier_normal_(self.value_linears[etype].weight, gain=gain)
         for etype in self.node_transformation_weight:
             nn.init.xavier_normal_(self.node_transformation_weight[etype], gain=gain)
         for etype in self.relation_transformation_weight:
@@ -247,7 +298,7 @@ class R_HGNN(nn.Module):
         """
 
         :param blocks: list of sampled dgl.DGLHeteroGraph
-        :param relation_target_node_features: target node features under each relation, dict, {(srctype, etype, dsttype): features}
+        :param feats: Dict[str, tensor(N_i, d_in)]
         :param relation_embedding: embedding for each relation, dict, {etype: feature} or None
         :return:
         """
@@ -264,8 +315,8 @@ class R_HGNN(nn.Module):
                 relation_embedding[etype] = self.relation_embedding[etype].flatten()
 
         # graph convolution
-        for block, layer in zip(blocks, self.layers):
-            relation_target_node_features, relation_embedding = layer(block, relation_target_node_features,
+        for block, layer, i in zip(blocks, self.layers, range(len(blocks))):
+            relation_target_node_features, relation_embedding, dst_nodes_after_transformation = layer(block, relation_target_node_features,
                                                                       relation_embedding)
 
         relation_fusion_embedding_dict = {}
@@ -273,16 +324,26 @@ class R_HGNN(nn.Module):
         for dsttype in set([dtype for _, _, dtype in relation_target_node_features]):
             relation_target_node_features_dict = {etype: relation_target_node_features[(stype, etype, dtype)]
                                                   for stype, etype, dtype in relation_target_node_features}
+
+
+            raw_target_node_features_dict = {etype: dst_nodes_after_transformation[(stype, etype, dtype)]
+                                             for stype, etype, dtype in dst_nodes_after_transformation}
             etypes = [etype for stype, etype, dtype in relation_target_node_features if dtype == dsttype]
+            # 得到每个终节点相关的基于关系的源节点聚合表示
+
             dst_node_features = [relation_target_node_features_dict[etype] for etype in etypes]
+            raw_dst_node_features = [raw_target_node_features_dict[etype] for etype in etypes]
             dst_relation_embeddings = [relation_embedding[etype] for etype in etypes]
-            dst_node_feature_transformation_weight = [self.node_transformation_weight[etype] for etype in etypes]
+            q_linears = [self.query_linears[etype] for etype in etypes]
+            k_linears = [self.key_linears[etype] for etype in etypes]
+            v_linears = [self.value_linears[etype] for etype in etypes]
             dst_relation_embedding_transformation_weight = [self.relation_transformation_weight[etype] for etype in etypes]
 
             # Tensor, shape (heads_num * hidden_dim)
             dst_node_relation_fusion_feature = self.relation_fusing(dst_node_features,
+                                                                    raw_dst_node_features,
                                                                     dst_relation_embeddings,
-                                                                    dst_node_feature_transformation_weight,
+                                                                    q_linears, k_linears, v_linears,
                                                                     dst_relation_embedding_transformation_weight)
 
             relation_fusion_embedding_dict[dsttype] = dst_node_relation_fusion_feature
@@ -291,7 +352,7 @@ class R_HGNN(nn.Module):
         # relation_target_node_features, {(srctype, etype, dsttype): (dst_nodes, n_heads * hidden_dim)}
         return relation_fusion_embedding_dict, relation_target_node_features
 
-    def inference(self, graph: dgl.DGLHeteroGraph, relation_target_node_features: dict, relation_embedding: dict = None,
+    def inference(self, graph: dgl.DGLHeteroGraph, relation_target_node_features: dict, dst_nodes_after_transformation: dict = None, relation_embedding: dict = None,
                   device: str = 'cuda:0'):
         """
         mini-batch inference of final representation over all node types. Outer loop: Interate the layers, Inner loop: Interate the batches
@@ -315,6 +376,10 @@ class R_HGNN(nn.Module):
                     (stype, etype, dtype): torch.zeros(graph.number_of_nodes(dtype), self.hidden_dim * self.n_heads) for
                     stype, etype, dtype in graph.canonical_etypes}
 
+                y_t = {
+                    (stype, etype, dtype): torch.zeros(graph.number_of_nodes(dtype), self.hidden_dim * self.n_heads) for
+                    stype, etype, dtype in graph.canonical_etypes}
+
                 # full sample for each type of nodes
                 sampler = dgl.dataloading.MultiLayerFullNeighborSampler(1)
                 dataloader = dgl.dataloading.NodeDataLoader(
@@ -324,7 +389,7 @@ class R_HGNN(nn.Module):
                     batch_size=1280,
                     shuffle=True,
                     drop_last=False,
-                    num_workers=4)  # 4 changed by yhj in 24.04.22
+                    num_workers=0)
 
                 tqdm_dataloader = tqdm(dataloader, ncols=120)
                 for batch, (input_nodes, output_nodes, blocks) in enumerate(tqdm_dataloader):
@@ -346,14 +411,18 @@ class R_HGNN(nn.Module):
                         for stype, reltype, dtype in input_features:
                             input_features[(stype, reltype, dtype)] = self.projection_layer[dtype](
                                 input_features[(stype, reltype, dtype)])
-                    h, input_relation_features = layer(block, input_features, input_relation_features)
+                    h, input_relation_features, dst_nodes_after_transformation = layer(block, input_features, input_relation_features)
                     for stype, reltype, dtype in h.keys():
                         y[(stype, reltype, dtype)][output_nodes[dtype]] = h[(stype, reltype, dtype)].cpu()
+
+                    for stype, reltype, dtype in dst_nodes_after_transformation.keys():
+                        y_t[(stype, reltype, dtype)][output_nodes[dtype]] = dst_nodes_after_transformation[(stype, reltype, dtype)].cpu()
 
                     tqdm_dataloader.set_description(f'inference for the {batch}-th batch in model {index}-th layer')
 
                 # update the features of all the nodes (after the graph convolution) in the whole graph
                 relation_target_node_features = y
+                dst_nodes_after_transformation = y_t
                 # relation embedding is updated after each layer
                 relation_embedding = input_relation_features
 
@@ -361,17 +430,29 @@ class R_HGNN(nn.Module):
                 relation_target_node_features[(stype, etype, dtype)] = relation_target_node_features[
                     (stype, etype, dtype)].to(device)
 
+            for stype, etype, dtype in dst_nodes_after_transformation:
+                dst_nodes_after_transformation[(stype, etype, dtype)] = dst_nodes_after_transformation[
+                    (stype, etype, dtype)].to(device)
+
             relation_fusion_embedding_dict = {}
             # relation_target_node_features -> {(srctype, etype, dsttype): target_node_features}
             for dsttype in set([dtype for _, _, dtype in relation_target_node_features]):
-
                 relation_target_node_features_dict = {etype: relation_target_node_features[(stype, etype, dtype)]
                                                       for stype, etype, dtype in relation_target_node_features}
+
+                raw_target_node_features_dict = {etype: dst_nodes_after_transformation[(stype, etype, dtype)]
+                                                 for stype, etype, dtype in dst_nodes_after_transformation}
                 etypes = [etype for stype, etype, dtype in relation_target_node_features if dtype == dsttype]
+                # 得到每个终节点相关的基于关系的源节点聚合表示
+
                 dst_node_features = [relation_target_node_features_dict[etype] for etype in etypes]
+                raw_dst_node_features = [raw_target_node_features_dict[etype] for etype in etypes]
                 dst_relation_embeddings = [relation_embedding[etype] for etype in etypes]
-                dst_node_feature_transformation_weight = [self.node_transformation_weight[etype] for etype in etypes]
-                dst_relation_embedding_transformation_weight = [self.relation_transformation_weight[etype] for etype in etypes]
+                q_linears = [self.query_linears[etype] for etype in etypes]
+                k_linears = [self.key_linears[etype] for etype in etypes]
+                v_linears = [self.value_linears[etype] for etype in etypes]
+                dst_relation_embedding_transformation_weight = [self.relation_transformation_weight[etype] for etype in
+                                                                etypes]
 
                 # use mini-batch to avoid out of memory in inference
                 relation_fusion_embedding = []
@@ -381,8 +462,9 @@ class R_HGNN(nn.Module):
                     # Tensor, shape (heads_num * hidden_dim)
                     relation_fusion_embedding.append(self.relation_fusing(
                         [dst_node_feature[index: index + batch_size, :] for dst_node_feature in dst_node_features],
+                        [raw_dst_node_feature[index: index + batch_size, :] for raw_dst_node_feature in raw_dst_node_features],
                         dst_relation_embeddings,
-                        dst_node_feature_transformation_weight,
+                        q_linears, k_linears, v_linears,
                         dst_relation_embedding_transformation_weight))
                     index += batch_size
                 relation_fusion_embedding_dict[dsttype] = torch.cat(relation_fusion_embedding, dim=0)

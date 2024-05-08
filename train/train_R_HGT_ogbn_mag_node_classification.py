@@ -12,12 +12,12 @@ import dgl
 from utils.utils import set_random_seed, convert_to_gpu, load_dataset
 from utils.utils import get_n_params, get_node_data_loader, get_optimizer_and_lr_scheduler, evaluate_node_classification
 from utils.EarlyStopping import EarlyStopping
-from model.R_HGNN import R_HGNN
+from model_y.R_HGT import R_HGT
 from utils.Classifier import Classifier
 
 args = {
     'dataset': 'OGB_MAG',
-    'model_name': 'R_HGNN_lr0.001_dropout0.5_seed_0',
+    'model_name': 'R_HGT_lr0.001_dropout0.5_seed_0_patience20',
     'predict_category': 'paper',
     'seed': 0,
     'cuda': 0,
@@ -33,7 +33,7 @@ args = {
     'optimizer': 'adam',
     'weight_decay': 0.0,
     'epochs': 200,
-    'patience': 50
+    'patience': 20
 }
 args['data_path'] = f'../dataset/{args["dataset"]}/{args["dataset"]}.pkl'
 args['data_split_idx_path'] = f'../dataset/{args["dataset"]}/{args["dataset"]}_split_idx.pkl'
@@ -107,7 +107,7 @@ if __name__ == '__main__':
                                                                  train_idx=train_idx, valid_idx=valid_idx,
                                                                  test_idx=test_idx)
 
-    r_hgnn = R_HGNN(graph=graph,
+    r_hgt = R_HGT(graph=graph,
                     input_dim_dict={ntype: graph.nodes[ntype].data['feat'].shape[1] for ntype in graph.ntypes},
                     hidden_dim=args['hidden_units'], relation_input_dim=args['relation_hidden_units'],
                     relation_hidden_dim=args['relation_hidden_units'],
@@ -116,7 +116,7 @@ if __name__ == '__main__':
 
     classifier = Classifier(n_hid=args['hidden_units'] * args['num_heads'], n_out=num_classes)
 
-    model = nn.Sequential(r_hgnn, classifier)
+    model = nn.Sequential(r_hgt, classifier)
 
     model = convert_to_gpu(model, device=args['device'])
     print(model)

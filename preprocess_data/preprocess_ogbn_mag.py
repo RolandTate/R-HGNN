@@ -16,7 +16,7 @@ from ogb.nodeproppred import DglNodePropPredDataset, PygNodePropPredDataset
 if __name__ == "__main__":
     # process ogbn-mag dataset and use metapath2vec model to generate features for other types of nodes
     args = {
-        'cuda': 1,
+        'cuda': 0,
         'embedding_dim': 128,
         'walk_length': 64,
         'context_size': 7,
@@ -41,6 +41,7 @@ if __name__ == "__main__":
     else:
         pyg_dataset = PygNodePropPredDataset(name='ogbn-mag', root='../dataset')
         pyg_data = pyg_dataset[0]
+        # print(f'pyg_dataset[0]: {pyg_data}')
 
         # ('author', 'affiliated_with', 'institution'),
         # ('author', 'writes', 'paper'),
@@ -87,7 +88,7 @@ if __name__ == "__main__":
                                           walks_per_node=args['walks_per_node'],
                                           num_negative_samples=args['num_negative_samples']).to(args['cuda'])
 
-        loader = metapath2vec_model.loader(batch_size=args['batch_size'], shuffle=True, num_workers=4)
+        loader = metapath2vec_model.loader(batch_size=args['batch_size'], shuffle=True, num_workers=0)
         optimizer = torch.optim.Adam(metapath2vec_model.parameters(), lr=0.01)
 
         metapath2vec_model.train()

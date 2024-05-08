@@ -79,7 +79,7 @@ def load_dataset(data_path: str, predict_category: str, data_split_idx_path: str
 def get_node_data_loader(node_neighbors_min_num: int, n_layers: int,
                          graph: dgl.DGLGraph, batch_size: int, sampled_node_type: str,
                          train_idx: torch.Tensor, valid_idx: torch.Tensor, test_idx: torch.Tensor,
-                         shuffle: bool = True, drop_last: bool = False, num_workers: int = 4):
+                         shuffle: bool = True, drop_last: bool = False, num_workers: int = 0):  # num_workers =4
     """
     get graph node data loader, including train_loader, val_loader and test_loader
     :return:
@@ -131,7 +131,7 @@ def get_edge_data_loader(node_neighbors_min_num: int, n_layers: int,
                          train_edge_idx: torch.Tensor, valid_edge_idx: torch.Tensor,
                          test_edge_idx: torch.Tensor,
                          reverse_etypes: dict, shuffle: bool = True, drop_last: bool = False,
-                         num_workers: int = 4):
+                         num_workers: int = 0):  # num_workers: 4, changed by yhj in 2024.04.13
     """
     get edge data loader for link prediction, including train_loader, val_loader and test_loader
     :return:
