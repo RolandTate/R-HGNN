@@ -10,6 +10,7 @@ from tqdm import tqdm
 import dgl
 
 from model_y.R_HGT import R_HGT
+from model_y_v2.R_HGT import CR_HGN
 from utils.utils import set_random_seed, convert_to_gpu, load_dataset
 from utils.EarlyStopping import EarlyStopping
 from utils.utils import get_n_params, get_edge_data_loader, get_predict_edge_index, get_optimizer_and_lr_scheduler, \
@@ -72,10 +73,11 @@ def evaluate(model: nn.Module, loader: dgl.dataloading.NodeDataLoader, loss_func
             blocks = [convert_to_gpu(b, device=device) for b in blocks]
             positive_graph, negative_graph = convert_to_gpu(positive_graph, negative_graph, device=device)
             # target node relation representation in the heterogeneous graph
-            input_features = {(stype, etype, dtype): blocks[0].srcnodes[dtype].data['feat'] for stype, etype, dtype in
-                              blocks[0].canonical_etypes}
+            # input_features = {(stype, etype, dtype): blocks[0].srcnodes[dtype].data['feat'] for stype, etype, dtype in
+            #                   blocks[0].canonical_etypes}
 
-            nodes_representation, _ = model[0](blocks, copy.deepcopy(input_features))
+            # nodes_representation, _ = model[0](blocks, copy.deepcopy(input_features))
+            nodes_representation = model[0](blocks)
 
             positive_score = model[1](positive_graph, nodes_representation, sampled_edge_type).squeeze(dim=-1)
             negative_score = model[1](negative_graph, nodes_representation, sampled_edge_type).squeeze(dim=-1)
@@ -139,7 +141,14 @@ if __name__ == '__main__':
                                                                  reverse_etypes=reverse_etypes)
 
 
-    r_hgt = R_HGT(graph=graph,
+    # r_hgt = R_HGT(graph=graph,
+    #               input_dim_dict={ntype: graph.nodes[ntype].data['feat'].shape[1] for ntype in graph.ntypes},
+    #               hidden_dim=args['hidden_units'], relation_input_dim=args['relation_hidden_units'],
+    #               relation_hidden_dim=args['relation_hidden_units'],
+    #               num_layers=args['n_layers'], n_heads=args['num_heads'], dropout=args['dropout'],
+    #               residual=args['residual'], norm=args['norm'])
+
+    cr_hgn = CR_HGN(graph=graph,
                   input_dim_dict={ntype: graph.nodes[ntype].data['feat'].shape[1] for ntype in graph.ntypes},
                   hidden_dim=args['hidden_units'], relation_input_dim=args['relation_hidden_units'],
                   relation_hidden_dim=args['relation_hidden_units'],
@@ -148,7 +157,7 @@ if __name__ == '__main__':
 
     link_score_predictor = LinkScorePredictor(hid_dim=args['hidden_units'] * args['num_heads'])
 
-    model = nn.Sequential(r_hgt, link_score_predictor)
+    model = nn.Sequential(cr_hgn, link_score_predictor)
 
     model = convert_to_gpu(model, device=args['device'])
     print(model)
@@ -186,10 +195,11 @@ if __name__ == '__main__':
             blocks = [convert_to_gpu(b, device=args['device']) for b in blocks]
             positive_graph, negative_graph = convert_to_gpu(positive_graph, negative_graph, device=args['device'])
             # target node relation representation in the heterogeneous graph
-            input_features = {(stype, etype, dtype): blocks[0].srcnodes[dtype].data['feat'] for stype, etype, dtype in
-                              blocks[0].canonical_etypes}
+            # input_features = {(stype, etype, dtype): blocks[0].srcnodes[dtype].data['feat'] for stype, etype, dtype in
+            #                   blocks[0].canonical_etypes}
 
-            nodes_representation, _ = model[0](blocks, copy.deepcopy(input_features))
+            # nodes_representation, _ = model[0](blocks, copy.deepcopy(input_features))
+            nodes_representation = model[0](blocks)
 
             positive_score = model[1](positive_graph, nodes_representation, args['sampled_edge_type']).squeeze(dim=-1)
             negative_score = model[1](negative_graph, nodes_representation, args['sampled_edge_type']).squeeze(dim=-1)

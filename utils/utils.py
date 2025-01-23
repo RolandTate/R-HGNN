@@ -205,9 +205,10 @@ def evaluate_node_classification(predicts: torch.Tensor, labels: torch.Tensor):
         "y_pred": predictions.reshape(-1, 1)
     })['acc']
 
+    micro_f1 = f1_score(y_true=labels, y_pred=predictions, average='micro')
     macro_f1 = f1_score(y_true=labels, y_pred=predictions, average='macro')
 
-    return accuracy, macro_f1
+    return accuracy, micro_f1, macro_f1
 
 
 def evaluate_link_prediction(predict_scores: torch.Tensor, true_scores: torch.Tensor):

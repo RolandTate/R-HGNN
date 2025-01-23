@@ -25,6 +25,7 @@ class RelationFusing(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.leaky_relu = nn.LeakyReLU(negative_slope)
 
+
     def forward(self, dst_node_features: list, raw_dst_node_features: list, dst_relation_embeddings: list,
                 q_linear: nn.Linear, k_linears: list, v_linears: list,
                 dst_relation_embedding_transformation_weight: list, residual_weight: nn.parameter):
@@ -86,7 +87,6 @@ class RelationFusing(nn.Module):
             # dst_node_relation_fusion_feature.shape: torch.Size([1280, 512])
             # raw_dst_node_features.shape: torch.Size([4, 1280, 512])
             alpha = F.sigmoid(residual_weight)
-            dst_node_relation_fusion_feature = dst_node_relation_fusion_feature * alpha + raw_dst_node_features * (
-                        1 - alpha)
+            dst_node_relation_fusion_feature = dst_node_relation_fusion_feature * alpha + raw_dst_node_features * (1 - alpha)
             # dst_node_relation_fusion_feature = dst_node_relation_fusion_feature + raw_dst_node_features
         return dst_node_relation_fusion_feature
